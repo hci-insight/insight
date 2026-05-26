@@ -1,0 +1,11 @@
+name: cv
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - opencv            # >=4.6 ships cv2.FaceDetectorYN (YuNet)
+  - pip
+  - pip:
+      - mss
+      - mediapipe     # Google Face Detection (Tasks API). Needs the .tflite model in models/
