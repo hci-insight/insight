@@ -23,6 +23,7 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent
 OUTPUT_ROOT = ROOT / "captures_compare"
+MODELS_DIR = ROOT / "models"
 WINDOW_NAME = "HCI Shot Capture Experiment"
 
 MODE_MANUAL = "manual"
@@ -30,6 +31,18 @@ MODE_PERSON1 = "person1"
 MODE_COUNT3 = "count3"
 MODE_RATIO = "ratio"
 MODES = (MODE_MANUAL, MODE_PERSON1, MODE_COUNT3, MODE_RATIO)
+
+# Person/face detector backends.
+# hog       : legacy OpenCV full-body HOG (window-scan, weak on top-down aerial shots)
+# mediapipe : Google MediaPipe Face Detection (single-pass, all faces at once)
+# yunet     : OpenCV YuNet ONNX face detector (single-pass, no heavy install)
+DETECTOR_HOG = "hog"
+DETECTOR_MEDIAPIPE = "mediapipe"
+DETECTOR_YUNET = "yunet"
+DETECTORS = (DETECTOR_HOG, DETECTOR_MEDIAPIPE, DETECTOR_YUNET)
+
+YUNET_MODEL_PATH = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
+MEDIAPIPE_MODEL_PATH = MODELS_DIR / "blaze_face_short_range.tflite"
 
 
 @dataclass
@@ -106,7 +119,25 @@ class ScreenSource(FrameSource):
         self.sct.close()
 
 
-class HOGPersonDetector:
+class PersonDetector:
+    """Common interface so the capture loop is detector-agnostic.
+
+    Every backend returns axis-aligned boxes in the analysis-frame coordinate
+    system. For face detectors the box is the face; for HOG it is the body.
+    """
+
+    name = "base"
+
+    def detect(self, frame: np.ndarray) -> List[Detection]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        pass
+
+
+class HOGPersonDetector(PersonDetector):
+    name = DETECTOR_HOG
+
     def __init__(self, max_width: int = 960, min_height_ratio: float = 0.12) -> None:
         self.hog = cv2.HOGDescriptor()
         self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
@@ -144,6 +175,144 @@ class HOGPersonDetector:
                 )
             )
         return non_max_suppression(detections, iou_threshold=0.35)
+
+
+class MediaPipeFaceDetector(PersonDetector):
+    """Google MediaPipe Face Detection (Tasks API, BlazeFace).
+
+    A single forward pass over the whole frame returns every face at once,
+    which is what the "한번에(one-shot) detection" feedback asks for. Works
+    well on top-down aerial group shots where faces are clearer than bodies.
+    """
+
+    name = DETECTOR_MEDIAPIPE
+
+    def __init__(
+        self,
+        model_path: Path = MEDIAPIPE_MODEL_PATH,
+        min_confidence: float = 0.5,
+    ) -> None:
+        if not model_path.exists():
+            raise RuntimeError(
+                f"MediaPipe model not found: {model_path}\n"
+                "Download it with:\n"
+                "  curl -fsSL -o models/blaze_face_short_range.tflite \\\n"
+                "    https://storage.googleapis.com/mediapipe-models/face_detector/"
+                "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+            )
+        try:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_python
+            from mediapipe.tasks.python import vision as mp_vision
+        except ImportError as exc:  # pragma: no cover - environment guard
+            raise RuntimeError(
+                "mediapipe is not installed. Run `pip install mediapipe` "
+                "inside the cv environment, or use --detector yunet."
+            ) from exc
+
+        self._mp = mp
+        options = mp_vision.FaceDetectorOptions(
+            base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+            min_detection_confidence=min_confidence,
+            running_mode=mp_vision.RunningMode.IMAGE,
+        )
+        self.detector = mp_vision.FaceDetector.create_from_options(options)
+
+    def detect(self, frame: np.ndarray) -> List[Detection]:
+        height, width = frame.shape[:2]
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+        result = self.detector.detect(mp_image)
+
+        detections: List[Detection] = []
+        for det in result.detections:
+            box = det.bounding_box
+            x = max(0, int(box.origin_x))
+            y = max(0, int(box.origin_y))
+            w = min(int(box.width), width - x)
+            h = min(int(box.height), height - y)
+            if w <= 0 or h <= 0:
+                continue
+            score = det.categories[0].score if det.categories else 0.0
+            detections.append(Detection(x=x, y=y, w=w, h=h, score=float(score)))
+        return detections
+
+    def close(self) -> None:
+        try:
+            self.detector.close()
+        except Exception:
+            pass
+
+
+class YuNetFaceDetector(PersonDetector):
+    """OpenCV YuNet ONNX face detector.
+
+    Same one-shot, whole-frame behaviour as MediaPipe but needs no extra pip
+    install beyond the small .onnx model file, so it is the fallback backend.
+    """
+
+    name = DETECTOR_YUNET
+
+    def __init__(
+        self,
+        model_path: Path = YUNET_MODEL_PATH,
+        score_threshold: float = 0.6,
+        nms_threshold: float = 0.3,
+    ) -> None:
+        if not hasattr(cv2, "FaceDetectorYN"):
+            raise RuntimeError(
+                "cv2.FaceDetectorYN is unavailable. Upgrade opencv "
+                "(opencv-python>=4.6) or use --detector mediapipe."
+            )
+        if not model_path.exists():
+            raise RuntimeError(
+                f"YuNet model not found: {model_path}\n"
+                "Download it with:\n"
+                "  curl -fsSL -o models/face_detection_yunet_2023mar.onnx \\\n"
+                "    https://github.com/opencv/opencv_zoo/raw/main/models/"
+                "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+            )
+        self.detector = cv2.FaceDetectorYN.create(
+            str(model_path),
+            "",
+            (320, 320),
+            score_threshold,
+            nms_threshold,
+            5000,
+        )
+        self._input_size: Tuple[int, int] = (0, 0)
+
+    def detect(self, frame: np.ndarray) -> List[Detection]:
+        height, width = frame.shape[:2]
+        if self._input_size != (width, height):
+            self.detector.setInputSize((width, height))
+            self._input_size = (width, height)
+
+        _, faces = self.detector.detect(frame)
+        detections: List[Detection] = []
+        if faces is None:
+            return detections
+        for face in faces:
+            x, y, w, h = (int(round(v)) for v in face[:4])
+            x = max(0, x)
+            y = max(0, y)
+            w = min(w, width - x)
+            h = min(h, height - y)
+            if w <= 0 or h <= 0:
+                continue
+            score = float(face[-1])
+            detections.append(Detection(x=x, y=y, w=w, h=h, score=score))
+        return detections
+
+
+def make_detector(name: str) -> PersonDetector:
+    if name == DETECTOR_HOG:
+        return HOGPersonDetector()
+    if name == DETECTOR_MEDIAPIPE:
+        return MediaPipeFaceDetector()
+    if name == DETECTOR_YUNET:
+        return YuNetFaceDetector()
+    raise RuntimeError(f"Unknown detector: {name}")
 
 
 def parse_rect(text: Optional[str]) -> Optional[Tuple[int, int, int, int]]:
@@ -255,6 +424,16 @@ def ensure_session_dirs(session_dir: Path) -> Dict[str, Path]:
     return paths
 
 
+def order_detections(detections: List[Detection]) -> List[Detection]:
+    """Stable left-to-right (then top-to-bottom) order for per-frame labeling.
+
+    This gives each detection a deterministic number (P1, P2, ...) within a
+    single frame without any cross-frame tracking, which matches the
+    "box + number label" scope for steps 1-3.
+    """
+    return sorted(detections, key=lambda d: (d.x + d.w / 2.0, d.y + d.h / 2.0))
+
+
 def draw_overlay(
     frame: np.ndarray,
     crop_rect: Tuple[int, int, int, int],
@@ -266,34 +445,46 @@ def draw_overlay(
     stable_hits: int,
     stable_frames: int,
     captures_per_mode: Dict[str, int],
+    target_persons: int,
+    detector_name: str,
 ) -> np.ndarray:
     overlay = frame.copy()
     left, top, width, height = crop_rect
     cv2.rectangle(overlay, (left, top), (left + width, top + height), (255, 200, 0), 2)
 
+    count_match = person_count == target_persons
     box_color = (0, 220, 0) if condition_met else (0, 140, 255)
-    for det in detections:
+    label_color = (0, 220, 0) if count_match else (0, 140, 255)
+
+    # Frame labeling: number each detected person P1..Pn (left -> right).
+    for index, det in enumerate(order_detections(detections), start=1):
         x1 = left + det.x
         y1 = top + det.y
         x2 = x1 + det.w
         y2 = y1 + det.h
         cv2.rectangle(overlay, (x1, y1), (x2, y2), box_color, 2)
+
+        tag = f"P{index} {det.score:.2f}"
+        (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        tag_top = max(0, y1 - th - 6)
+        cv2.rectangle(overlay, (x1, tag_top), (x1 + tw + 6, tag_top + th + 6), box_color, -1)
         cv2.putText(
             overlay,
-            f"{det.score:.2f}",
-            (x1, max(15, y1 - 8)),
+            tag,
+            (x1 + 3, tag_top + th + 1),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            box_color,
+            0.5,
+            (0, 0, 0),
             1,
             cv2.LINE_AA,
         )
 
+    count_state = "MATCH" if count_match else ("OVER" if person_count > target_persons else "UNDER")
     info_lines = [
-        f"Mode: {mode}   [1] manual [2] person1 [3] count3 [4] ratio",
-        f"Persons: {person_count}   Ratio: {area_ratio:.3f}",
+        f"Mode: {mode}   Detector: {detector_name}",
+        f"Count: {person_count}/{target_persons} [{count_state}]   Ratio: {area_ratio:.3f}",
         f"Stable: {stable_hits}/{stable_frames}   Saved: {captures_per_mode[mode]}",
-        "Keys: [c]/[space] capture, [q] quit",
+        "Keys: [1-4] mode  [-/=] target  [c]/[space] capture  [q] quit",
     ]
     if mode == MODE_MANUAL:
         info_lines[2] = f"Manual mode   Saved: {captures_per_mode[mode]}"
@@ -408,16 +599,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional crop inside the input frame: left,top,width,height.",
     )
     parser.add_argument(
+        "--detector",
+        choices=DETECTORS,
+        default=DETECTOR_MEDIAPIPE,
+        help="Detection backend: mediapipe (Google face), yunet (OpenCV face), hog (legacy body).",
+    )
+    parser.add_argument(
         "--start-mode",
         choices=MODES,
-        default=MODE_PERSON1,
+        default=MODE_COUNT3,
         help="Initial capture mode.",
     )
     parser.add_argument(
         "--target-persons",
         type=int,
         default=3,
-        help="Target person count for count3 mode.",
+        help="Target head count for count3 mode (step 1: number of people). Adjust live with -/=.",
     )
     parser.add_argument(
         "--ratio-min",
@@ -470,8 +667,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--detect-every",
         type=int,
-        default=2,
-        help="Run person detection once every N frames to reduce CPU load.",
+        default=1,
+        help="Run detection once every N frames. 1 = detect all people in every frame (one-shot).",
     )
     return parser
 
@@ -493,7 +690,8 @@ def make_source(args: argparse.Namespace) -> FrameSource:
 def main() -> None:
     args = build_arg_parser().parse_args()
     source = make_source(args)
-    detector = HOGPersonDetector()
+    detector = make_detector(args.detector)
+    target_persons = max(1, args.target_persons)
 
     session_name = time.strftime("%Y%m%d-%H%M%S")
     session_dir = OUTPUT_ROOT / session_name
@@ -511,9 +709,10 @@ def main() -> None:
     print("=" * 68)
     print("Session:", session_dir)
     print("Environment: conda activate cv")
-    print("Modes: 1=manual, 2=person1, 3=count3, 4=ratio")
-    print("Capture: c or SPACE")
-    print("Quit: q")
+    print(f"Detector: {detector.name}   Target persons: {target_persons}")
+    print("Modes: 1=manual, 2=person1, 3=count(N), 4=ratio")
+    print("Target persons: '-' decrease, '=' increase")
+    print("Capture: c or SPACE   Quit: q")
     print("=" * 68)
 
     try:
@@ -535,7 +734,7 @@ def main() -> None:
                 frame_shape=analysis_frame.shape,
                 person_count=person_count,
                 area_ratio=area_ratio,
-                target_persons=args.target_persons,
+                target_persons=target_persons,
                 ratio_min=args.ratio_min,
                 ratio_max=args.ratio_max,
                 one_person_ratio_min=args.one_person_ratio_min,
@@ -562,6 +761,8 @@ def main() -> None:
                 stable_hits=stable_hits,
                 stable_frames=args.stable_frames,
                 captures_per_mode=captures_per_mode,
+                target_persons=target_persons,
+                detector_name=detector.name,
             )
 
             now = time.time()
@@ -607,6 +808,14 @@ def main() -> None:
             elif key == ord("4"):
                 mode = MODE_RATIO
                 stable_hits = 0
+            elif key == ord("-"):
+                target_persons = max(1, target_persons - 1)
+                stable_hits = 0
+                print(f"[target] persons = {target_persons}")
+            elif key in (ord("="), ord("+")):
+                target_persons += 1
+                stable_hits = 0
+                print(f"[target] persons = {target_persons}")
             elif key in (ord("c"), 32):
                 captures_per_mode[mode] += 1
                 now = time.time()
@@ -630,6 +839,7 @@ def main() -> None:
             frame_index += 1
     finally:
         source.close()
+        detector.close()
         cv2.destroyAllWindows()
 
 

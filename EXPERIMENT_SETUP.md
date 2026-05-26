@@ -13,6 +13,22 @@ conda env create -f visionproject/environment.yml
 conda activate cv
 ```
 
+### Download detector models (run once)
+
+The face detectors need small model files (~230 KB each) in `visionproject/models/`:
+
+```bash
+cd visionproject
+bash download_models.sh
+```
+
+This fetches:
+
+- `models/blaze_face_short_range.tflite` — MediaPipe (Google) Face Detection
+- `models/face_detection_yunet_2023mar.onnx` — OpenCV YuNet face detector
+
+If a model file is missing, the script also prints the exact `curl` command when it starts.
+
 On macOS, `scrcpy` and `adb` can also be installed from the included Brewfile:
 
 ```bash
@@ -20,6 +36,41 @@ brew bundle --file visionproject/Brewfile
 ```
 
 It supports several capture policies in one loop so you can compare them with the same scene.
+
+## Detectors (`--detector`)
+
+The detection backend is selectable. Faces are detected in a **single pass over
+the whole frame** (one-shot), so every person is found at once instead of the
+window-scanning, flickering behaviour of the old HOG path.
+
+| `--detector`  | What it detects | Notes |
+| ------------- | --------------- | ----- |
+| `mediapipe` (default) | Faces (Google MediaPipe / BlazeFace) | Best on top-down aerial group shots. Needs `mediapipe` + the `.tflite` model. |
+| `yunet`       | Faces (OpenCV YuNet ONNX) | No extra pip install beyond the `.onnx` model. Good fallback. |
+| `hog`         | Full bodies (legacy OpenCV HOG) | Window-scan; weak on top-down views (~32.5% hit rate in our test). Kept for comparison. |
+
+Example:
+
+```bash
+python visionproject/shot_capture_experiment.py --detector mediapipe --source webcam
+python visionproject/shot_capture_experiment.py --detector yunet    --source webcam
+```
+
+## Step 1-3: head-count match (count mode)
+
+The `count3` mode covers steps 1-3 of the program logic:
+
+1. **Set the number of people** — `--target-persons N`, or adjust live with `-` / `=`.
+2. **Detect the count from the camera** — one-shot face detection per frame.
+3. **Verify detected == target** — the overlay shows `Count: n/N [MATCH|UNDER|OVER]`,
+   and each detected person is **labeled** with a numbered box (`P1`, `P2`, …),
+   ordered left-to-right within the frame. When the count matches and stays
+   stable for `--stable-frames`, it auto-captures.
+
+```bash
+python visionproject/shot_capture_experiment.py \
+  --detector mediapipe --start-mode count3 --target-persons 4
+```
 
 Modes:
 
@@ -78,6 +129,8 @@ python visionproject/shot_capture_experiment.py --source webcam --webcam-index 0
 - `2`: switch to `person1` mode
 - `3`: switch to `count3` mode
 - `4`: switch to `ratio` mode
+- `-`: decrease target person count
+- `=` (or `+`): increase target person count
 - `c` or `space`: capture immediately
 - `q`: quit
 
@@ -144,8 +197,13 @@ That gives you:
 - simple single-subject auto capture
 - composition-size based auto capture
 
-## Important limitation
+## Detector notes
 
-The current prototype uses OpenCV HOG person detection. It is easy to run in `cv` and does not need extra model files, but it can miss seated people or strong top-down views.
+The default detector is now **MediaPipe (Google) Face Detection**, with **YuNet**
+as a no-extra-install fallback. Both are one-shot face detectors and handle the
+top-down aerial composition far better than the legacy `--detector hog` path,
+which our test showed only recognised a person ~32.5% of the time.
 
-That is acceptable for a first comparison pass. If the loop and logging feel right, you can later replace only the detector with a stronger model while keeping the same experiment structure.
+The `hog` backend is kept only for comparison. Face detection assumes faces are
+visible (which matches the redesigned composition criterion in the slides:
+"얼굴이 보이는 구도").
