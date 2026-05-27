@@ -9,3 +9,4 @@ dependencies:
   - pip:
       - mss
       - mediapipe     # Google Face Detection (Tasks API). Needs the .tflite model in models/
+      - gTTS          # More natural Korean voice guidance when network is available

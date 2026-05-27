@@ -56,6 +56,28 @@ python visionproject/shot_capture_experiment.py --detector mediapipe --source we
 python visionproject/shot_capture_experiment.py --detector yunet    --source webcam
 ```
 
+## Face overlap voice guidance
+
+The main experiment script also checks whether detected face boxes overlap.
+When overlap is detected, it keeps stable person IDs with centroid tracking and
+speaks a Korean position-based guide such as:
+
+```text
+2시에 있는 분, 옆 사람과 조금 떨어져 주세요.
+```
+
+The overlay shows tracking IDs and an `Overlap:` status line. The same overlap
+pair is announced only once while it remains unresolved; it can be announced
+again after the overlap disappears for several frames and then returns.
+
+Useful options:
+
+- `--overlap-threshold 0.12`: face-overlap sensitivity. Larger values are less sensitive.
+- `--disable-overlap-voice`: keep visual overlap detection on, but mute voice guidance.
+
+Voice output tries `gTTS` first for more natural Korean speech, then falls back
+to local system TTS commands such as `spd-say`, `espeak`, or macOS `say`.
+
 ## Step 1-3: head-count match (count mode)
 
 The `count3` mode covers steps 1-3 of the program logic:
