@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Protocol, Sequence, Tuple, Union
 
+from camera_guidance import (
+    CenterAlignment,
+    compute_center_alignment,
+    draw_center_alignment_overlay,
+)
+from model_path_helper import native_safe_model_path
+
 try:
     import cv2
     import numpy as np
@@ -251,9 +258,10 @@ class MediaPipeFaceDetector(PersonDetector):
                 "inside the cv environment, or use --detector yunet."
             ) from exc
 
+        safe_model_path = native_safe_model_path(model_path)
         self._mp = mp
         options = mp_vision.FaceDetectorOptions(
-            base_options=mp_python.BaseOptions(model_asset_path=str(model_path)),
+            base_options=mp_python.BaseOptions(model_asset_path=str(safe_model_path)),
             min_detection_confidence=min_confidence,
             running_mode=mp_vision.RunningMode.IMAGE,
         )
@@ -313,8 +321,9 @@ class YuNetFaceDetector(PersonDetector):
                 "    https://github.com/opencv/opencv_zoo/raw/main/models/"
                 "face_detection_yunet/face_detection_yunet_2023mar.onnx"
             )
+        safe_model_path = native_safe_model_path(model_path)
         self.detector = cv2.FaceDetectorYN.create(
-            str(model_path),
+            str(safe_model_path),
             "",
             (320, 320),
             score_threshold,
@@ -864,12 +873,11 @@ def mode_condition_met(
             return False
         det = detections[0]
         frame_h, frame_w = frame_shape[:2]
-        center_x = det.x + det.w / 2.0
-        center_y = det.y + det.h / 2.0
-        target_x = frame_w / 2.0
-        target_y = frame_h / 2.0
-        within_center_x = abs(center_x - target_x) <= frame_w * center_tolerance
-        within_center_y = abs(center_y - target_y) <= frame_h * center_tolerance
+        center_alignment = compute_center_alignment(
+            detections,
+            frame_shape,
+            center_tolerance,
+        )
         margin_x = frame_w * border_margin_ratio
         margin_y = frame_h * border_margin_ratio
         inside_margin = (
@@ -879,7 +887,7 @@ def mode_condition_met(
             and (det.y + det.h) <= (frame_h - margin_y)
         )
         within_ratio = one_person_ratio_min <= area_ratio <= one_person_ratio_max
-        return within_center_x and within_center_y and inside_margin and within_ratio
+        return center_alignment.aligned and inside_margin and within_ratio
     if mode == MODE_COUNT3:
         return person_count == target_persons
     if mode == MODE_RATIO:
@@ -919,6 +927,7 @@ def draw_overlay(
     captures_per_mode: Dict[str, int],
     target_persons: int,
     detector_name: str,
+    center_alignment: CenterAlignment,
 ) -> np.ndarray:
     overlay = frame.copy()
     left, top, width, height = crop_rect
@@ -980,6 +989,8 @@ def draw_overlay(
                 cv2.LINE_AA,
             )
 
+    draw_center_alignment_overlay(cv2, overlay, crop_rect, center_alignment)
+
     count_state = "MATCH" if count_match else ("OVER" if person_count > target_persons else "UNDER")
     overlap_state = "clear"
     if overlap_events:
@@ -988,11 +999,13 @@ def draw_overlay(
     info_lines = [
         f"Mode: {mode}   Detector: {detector_name}",
         f"Count: {person_count}/{target_persons} [{count_state}]   Ratio: {area_ratio:.3f}",
+        center_alignment.overlay_text,
         f"Overlap: {overlap_state}",
         f"Stable: {stable_hits}/{stable_frames}   Saved: {captures_per_mode[mode]}",
         "Keys: [1-4] mode  [-/=] target  [c]/[space] capture  [q] quit",
     ]
     if mode == MODE_MANUAL:
+        info_lines[3] = f"Manual mode   Saved: {captures_per_mode[mode]}"
         info_lines[3] = f"Manual mode   Saved: {captures_per_mode[mode]}"
 
     y = 24
@@ -1259,6 +1272,11 @@ def main() -> None:
             )
             person_count = len(detections)
             area_ratio = compute_people_area_ratio(detections, analysis_frame.shape)
+            center_alignment = compute_center_alignment(
+                detections,
+                analysis_frame.shape,
+                args.center_tolerance,
+            )
             condition_met = mode_condition_met(
                 mode=mode,
                 detections=detections,
@@ -1296,6 +1314,7 @@ def main() -> None:
                 captures_per_mode=captures_per_mode,
                 target_persons=target_persons,
                 detector_name=detector.name,
+                center_alignment=center_alignment,
             )
 
             now = time.time()
