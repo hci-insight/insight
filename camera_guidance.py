@@ -61,6 +61,49 @@ def draw_center_alignment_overlay(
             cv2_module.LINE_AA,
         )
 
+    text = center_alignment.overlay_text
+    if text:
+        font = cv2_module.FONT_HERSHEY_SIMPLEX
+        scale = 0.7
+        thickness = 2
+        (text_w, text_h), _ = cv2_module.getTextSize(text, font, scale, thickness)
+        text_x = left + 12
+        text_y = top + int(round(center_alignment.frame_center_y)) + 50
+        box_tl = (text_x - 8, text_y - text_h - 8)
+        box_br = (text_x + text_w + 8, text_y + 8)
+        cv2_module.rectangle(overlay, box_tl, box_br, (0, 0, 0), -1)
+        cv2_module.putText(
+            overlay,
+            text,
+            (text_x, text_y),
+            font,
+            scale,
+            guide_color,
+            thickness,
+            cv2_module.LINE_AA,
+        )
+        
+    if text:
+        font = cv2_module.FONT_HERSHEY_SIMPLEX
+        scale = 0.7
+        thickness = 2
+        (text_w, text_h), _ = cv2_module.getTextSize(text, font, scale, thickness)
+        text_x = left + 12
+        text_y = top + int(round(center_alignment.frame_center_y)) + 50
+        box_tl = (text_x - 8, text_y - text_h - 8)
+        box_br = (text_x + text_w + 8, text_y + 8)
+        cv2_module.rectangle(overlay, box_tl, box_br, (0, 0, 0), -1)
+        cv2_module.putText(
+            overlay,
+            text,
+            (text_x, text_y),
+            font,
+            scale,
+            guide_color,
+            thickness,
+            cv2_module.LINE_AA,
+        )
+
 
 def compute_center_alignment(
     detections: Sequence[DetectionLike],
@@ -83,7 +126,7 @@ def compute_center_alignment(
             frame_center_y=frame_center_y,
             offset_x=0.0,
             offset_y=0.0,
-            overlay_text="Center: NO TARGET",
+            overlay_text="No target",
         )
 
     left = min(det.x for det in detections)
@@ -99,20 +142,20 @@ def compute_center_alignment(
     aligned = aligned_x and aligned_y
 
     if aligned:
-        overlay_text = "Center: OK"
+        overlay_text = "Centered"
     else:
         overlay_directions: List[str] = []
         if not aligned_x:
             if offset_x < 0:
-                overlay_directions.append("LEFT")
+                overlay_directions.append("left")
             else:
-                overlay_directions.append("RIGHT")
+                overlay_directions.append("right")
         if not aligned_y:
             if offset_y < 0:
-                overlay_directions.append("UP")
+                overlay_directions.append("up")
             else:
-                overlay_directions.append("DOWN")
-        overlay_text = f"Center: TURN {'+'.join(overlay_directions)}"
+                overlay_directions.append("down")
+        overlay_text = f"Turn camera {' and '.join(overlay_directions)}"
 
     return CenterAlignment(
         has_target=True,
