@@ -999,14 +999,12 @@ def draw_overlay(
     info_lines = [
         f"Mode: {mode}   Detector: {detector_name}",
         f"Count: {person_count}/{target_persons} [{count_state}]   Ratio: {area_ratio:.3f}",
-        center_alignment.overlay_text,
         f"Overlap: {overlap_state}",
         f"Stable: {stable_hits}/{stable_frames}   Saved: {captures_per_mode[mode]}",
         "Keys: [1-4] mode  [-/=] target  [c]/[space] capture  [q] quit",
     ]
     if mode == MODE_MANUAL:
-        info_lines[3] = f"Manual mode   Saved: {captures_per_mode[mode]}"
-        info_lines[3] = f"Manual mode   Saved: {captures_per_mode[mode]}"
+        info_lines[2] = f"Manual mode   Saved: {captures_per_mode[mode]}"
 
     y = 24
     for line in info_lines:
@@ -1221,9 +1219,10 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     source = make_source(args)
     detector = make_detector(args.detector)
+    speech = SpeechNotifier(enabled=not args.disable_overlap_voice)
     overlap_guide = FaceOverlapGuidance(
         overlap_threshold=args.overlap_threshold,
-        speech=SpeechNotifier(enabled=not args.disable_overlap_voice),
+        speech=speech,
     )
     target_persons = max(1, args.target_persons)
 
@@ -1277,6 +1276,9 @@ def main() -> None:
                 analysis_frame.shape,
                 args.center_tolerance,
             )
+            if not center_alignment.aligned:
+                speech.speak(center_alignment.overlay_text)
+
             condition_met = mode_condition_met(
                 mode=mode,
                 detections=detections,
