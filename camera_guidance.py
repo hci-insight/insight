@@ -82,6 +82,27 @@ def draw_center_alignment_overlay(
             thickness,
             cv2_module.LINE_AA,
         )
+        
+    if text:
+        font = cv2_module.FONT_HERSHEY_SIMPLEX
+        scale = 0.7
+        thickness = 2
+        (text_w, text_h), _ = cv2_module.getTextSize(text, font, scale, thickness)
+        text_x = left + 12
+        text_y = top + int(round(center_alignment.frame_center_y)) + 50
+        box_tl = (text_x - 8, text_y - text_h - 8)
+        box_br = (text_x + text_w + 8, text_y + 8)
+        cv2_module.rectangle(overlay, box_tl, box_br, (0, 0, 0), -1)
+        cv2_module.putText(
+            overlay,
+            text,
+            (text_x, text_y),
+            font,
+            scale,
+            guide_color,
+            thickness,
+            cv2_module.LINE_AA,
+        )
 
 
 def compute_center_alignment(
