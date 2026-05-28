@@ -1,14 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Protocol, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
-
-class DetectionLike(Protocol):
-    x: int
-    y: int
-    w: int
-    h: int
+from utils import DetectionLike
 
 
 @dataclass
@@ -82,27 +77,6 @@ def draw_center_alignment_overlay(
             thickness,
             cv2_module.LINE_AA,
         )
-        
-    if text:
-        font = cv2_module.FONT_HERSHEY_SIMPLEX
-        scale = 0.7
-        thickness = 2
-        (text_w, text_h), _ = cv2_module.getTextSize(text, font, scale, thickness)
-        text_x = left + 12
-        text_y = top + int(round(center_alignment.frame_center_y)) + 50
-        box_tl = (text_x - 8, text_y - text_h - 8)
-        box_br = (text_x + text_w + 8, text_y + 8)
-        cv2_module.rectangle(overlay, box_tl, box_br, (0, 0, 0), -1)
-        cv2_module.putText(
-            overlay,
-            text,
-            (text_x, text_y),
-            font,
-            scale,
-            guide_color,
-            thickness,
-            cv2_module.LINE_AA,
-        )
 
 
 def compute_center_alignment(
@@ -146,15 +120,9 @@ def compute_center_alignment(
     else:
         overlay_directions: List[str] = []
         if not aligned_x:
-            if offset_x < 0:
-                overlay_directions.append("left")
-            else:
-                overlay_directions.append("right")
+            overlay_directions.append("left" if offset_x < 0 else "right")
         if not aligned_y:
-            if offset_y < 0:
-                overlay_directions.append("up")
-            else:
-                overlay_directions.append("down")
+            overlay_directions.append("up" if offset_y < 0 else "down")
         overlay_text = f"Turn camera {' and '.join(overlay_directions)}"
 
     return CenterAlignment(
