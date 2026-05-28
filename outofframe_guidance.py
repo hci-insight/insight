@@ -8,7 +8,7 @@ import numpy as np
 
 from speech import SpeechNotifier
 from tracking import CentroidTracker, TrackedPerson
-from utils import BBox, DetectionLike, _as_bbox
+from utils import BBox, DetectionLike, _as_bbox, clock_position
 
 
 @dataclass
@@ -105,8 +105,8 @@ class FaceOutOfFrameGuidance:
             if not directions:
                 continue
 
-            direction_str = " 또는 ".join(directions)
-            message = f"화면 가장자리에 있는 분, {direction_str}으로 조금 이동해 주세요."
+            clock_pos = clock_position(person.centroid, frame_shape)
+            message = f"{clock_pos} 방향에 있는 분 화면 안으로 들어와 주세요."
             events.append(
                 OutOfFrameEvent(
                     object_id=person.object_id,

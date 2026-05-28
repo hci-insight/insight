@@ -35,12 +35,13 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     source = make_source(args)
     detector = make_detector(args.detector)
+    speech = SpeechNotifier(enabled=not args.disable_overlap_voice)
     overlap_guide = FaceOverlapGuidance(
         overlap_threshold=args.overlap_threshold,
-        speech=SpeechNotifier(enabled=not args.disable_overlap_voice),
+        speech=speech,
     )
     outofframe_guide = FaceOutOfFrameGuidance(
-        speech=SpeechNotifier(enabled=not args.disable_overlap_voice),
+        speech=speech,
     )
     target_persons = max(1, args.target_persons)
 

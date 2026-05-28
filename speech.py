@@ -11,6 +11,9 @@ import time
 class SpeechNotifier:
     """로컬 TTS가 가능하면 한국어 안내 문장을 음성으로 읽어주는 클래스입니다."""
 
+    _global_lock: threading.Lock = threading.Lock()
+    _global_last_spoken_at: float = 0.0
+
     def __init__(self, enabled: bool = True, cooldown_sec: float = 2.0) -> None:
         self.enabled = enabled
         self.cooldown_sec = cooldown_sec
@@ -37,16 +40,16 @@ class SpeechNotifier:
             return False
         now = time.time()
 
-        if message == self.last_message and (now - self.last_spoken_at) < self.cooldown_sec:
-            return False
-        if (now - self.last_spoken_at) < self.cooldown_sec:
-            return False
-
-        spoken = self._speak_now(message)
-        if spoken:
-            self.last_message = message
+        with SpeechNotifier._global_lock:
+            if now - SpeechNotifier._global_last_spoken_at < self.cooldown_sec:
+                return False
+            if message == self.last_message and (now - self.last_spoken_at) < self.cooldown_sec:
+                return False
+            SpeechNotifier._global_last_spoken_at = now
             self.last_spoken_at = now
-        return spoken
+            self.last_message = message
+
+        return self._speak_now(message)
 
     def _speak_now(self, message: str) -> bool:
         if self._speak_with_gtts(message):
