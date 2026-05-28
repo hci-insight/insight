@@ -466,7 +466,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--disable-overlap-voice",
         action="store_true",
-        help="Detect and show face overlap, but do not speak guidance aloud.",
+        dest="disable_guidance_voice",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--disable-guidance-voice",
+        action="store_true",
+        help="Show guidance visually, but do not speak feedback aloud.",
     )
     return parser
 
@@ -483,5 +489,4 @@ def make_source(args: argparse.Namespace) -> FrameSource:
             "--screen-region left,top,width,height is required when --source screen is used."
         )
     return ScreenSource(args.screen_region)
-
 

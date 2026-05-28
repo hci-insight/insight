@@ -13,8 +13,9 @@ class SpeechNotifier:
 
     _global_lock: threading.Lock = threading.Lock()
     _global_last_spoken_at: float = 0.0
+    _global_is_playing: bool = False
 
-    def __init__(self, enabled: bool = True, cooldown_sec: float = 2.0) -> None:
+    def __init__(self, enabled: bool = True, cooldown_sec: float = 1.0) -> None:
         self.enabled = enabled
         self.cooldown_sec = cooldown_sec
         self.last_spoken_at = 0.0
@@ -41,24 +42,33 @@ class SpeechNotifier:
         now = time.time()
 
         with SpeechNotifier._global_lock:
+            if SpeechNotifier._global_is_playing:
+                return False
             if now - SpeechNotifier._global_last_spoken_at < self.cooldown_sec:
                 return False
             if message == self.last_message and (now - self.last_spoken_at) < self.cooldown_sec:
                 return False
-            SpeechNotifier._global_last_spoken_at = now
-            self.last_spoken_at = now
-            self.last_message = message
+            SpeechNotifier._global_is_playing = True
 
-        return self._speak_now(message)
+        spoken, async_playback = self._speak_now(message)
+        if not spoken:
+            self._mark_playback_done()
+            return False
 
-    def _speak_now(self, message: str) -> bool:
+        self.last_spoken_at = now
+        self.last_message = message
+        if not async_playback:
+            self._mark_playback_done()
+        return True
+
+    def _speak_now(self, message: str) -> tuple[bool, bool]:
         if self._speak_with_gtts(message):
-            return True
+            return True, True
 
         if self._engine is not None:
             self._engine.say(message)
             self._engine.runAndWait()
-            return True
+            return True, False
 
         command_candidates = (
             ("spd-say", ["spd-say", "-l", "ko", message]),
@@ -68,13 +78,18 @@ class SpeechNotifier:
         )
         for command, args in command_candidates:
             if shutil.which(command):
-                subprocess.Popen(
+                process = subprocess.Popen(
                     args,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                return True
-        return False
+                threading.Thread(
+                    target=self._wait_for_process,
+                    args=(process,),
+                    daemon=True,
+                ).start()
+                return True, True
+        return False, False
 
     def _select_korean_voice(self) -> None:
         if self._engine is None:
@@ -124,10 +139,22 @@ class SpeechNotifier:
         except Exception:
             return False
 
-    @staticmethod
-    def _cleanup_audio_after_playback(process: subprocess.Popen, audio_path: str) -> None:
+    @classmethod
+    def _mark_playback_done(cls) -> None:
+        with SpeechNotifier._global_lock:
+            SpeechNotifier._global_is_playing = False
+            SpeechNotifier._global_last_spoken_at = time.time()
+
+    @classmethod
+    def _wait_for_process(cls, process: subprocess.Popen) -> None:
+        process.wait()
+        cls._mark_playback_done()
+
+    @classmethod
+    def _cleanup_audio_after_playback(cls, process: subprocess.Popen, audio_path: str) -> None:
         process.wait()
         try:
             os.unlink(audio_path)
         except OSError:
             pass
+        cls._mark_playback_done()

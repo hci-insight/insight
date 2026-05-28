@@ -5,7 +5,7 @@ from typing import List
 
 import cv2
 
-from camera_guidance import compute_center_alignment
+from camera_guidance import CenterAlignmentVoiceGuidance, compute_center_alignment
 from detection import Detection, make_detector
 from outofframe_guidance import FaceOutOfFrameGuidance
 from overlap_guidance import FaceOverlapGuidance
@@ -35,12 +35,15 @@ def main() -> None:
     args = build_arg_parser().parse_args()
     source = make_source(args)
     detector = make_detector(args.detector)
-    speech = SpeechNotifier(enabled=not args.disable_overlap_voice)
+    speech = SpeechNotifier(enabled=not args.disable_guidance_voice)
     overlap_guide = FaceOverlapGuidance(
         overlap_threshold=args.overlap_threshold,
         speech=speech,
     )
     outofframe_guide = FaceOutOfFrameGuidance(
+        speech=speech,
+    )
+    center_voice_guide = CenterAlignmentVoiceGuidance(
         speech=speech,
     )
     target_persons = max(1, args.target_persons)
@@ -63,8 +66,8 @@ def main() -> None:
     print("Environment: conda activate cv")
     print(f"Detector: {detector.name}   Target persons: {target_persons}")
     print(
-        "Overlap guidance:",
-        "visual only" if args.disable_overlap_voice else "visual + voice",
+        "Guidance:",
+        "visual only" if args.disable_guidance_voice else "visual + voice",
         f"(threshold={args.overlap_threshold})",
     )
     print("Modes: 1=manual, 2=person1, 3=count(N), 4=ratio")
@@ -84,15 +87,15 @@ def main() -> None:
                 last_detections = detector.detect(analysis_frame)
             detections = last_detections
 
+            _, outofframe_events = outofframe_guide.process(
+                analysis_frame,
+                detections,
+                speak=not args.disable_guidance_voice,
+            )
             overlap_tracks, overlap_events = overlap_guide.process(
                 analysis_frame,
                 detections,
-                speak=not args.disable_overlap_voice,
-            )
-            outofframe_guide.process(
-                analysis_frame,
-                detections,
-                speak=not args.disable_overlap_voice,
+                speak=not args.disable_guidance_voice and not outofframe_events,
             )
             person_count = len(detections)
             area_ratio = compute_people_area_ratio(detections, analysis_frame.shape)
@@ -100,6 +103,14 @@ def main() -> None:
                 detections,
                 analysis_frame.shape,
                 args.center_tolerance,
+            )
+            center_voice_guide.process(
+                center_alignment,
+                speak=(
+                    not args.disable_guidance_voice
+                    and not outofframe_events
+                    and not overlap_events
+                ),
             )
 
             condition_met = mode_condition_met(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, List, Sequence, Tuple
 
+from speech import SpeechNotifier
 from utils import DetectionLike
 
 
@@ -17,6 +18,8 @@ class CenterAlignment:
     offset_x: float
     offset_y: float
     overlay_text: str
+    voice_message: str
+    voice_key: str
 
 
 def draw_center_alignment_overlay(
@@ -101,6 +104,8 @@ def compute_center_alignment(
             offset_x=0.0,
             offset_y=0.0,
             overlay_text="No target",
+            voice_message="",
+            voice_key="",
         )
 
     left = min(det.x for det in detections)
@@ -117,13 +122,24 @@ def compute_center_alignment(
 
     if aligned:
         overlay_text = "Centered"
+        voice_message = ""
+        voice_key = ""
     else:
         overlay_directions: List[str] = []
+        voice_directions: List[str] = []
         if not aligned_x:
             overlay_directions.append("left" if offset_x < 0 else "right")
+            voice_directions.append("왼쪽" if offset_x < 0 else "오른쪽")
         if not aligned_y:
             overlay_directions.append("up" if offset_y < 0 else "down")
+            voice_directions.append("위쪽" if offset_y < 0 else "아래쪽")
         overlay_text = f"Turn camera {' and '.join(overlay_directions)}"
+        voice_direction_text = "과 ".join(voice_directions)
+        voice_message = (
+            f"인물들의 중심이 {voice_direction_text}으로 치우쳐 있어요. "
+            f"카메라를 {voice_direction_text}으로 조금 돌려 주세요."
+        )
+        voice_key = ",".join(overlay_directions)
 
     return CenterAlignment(
         has_target=True,
@@ -135,4 +151,42 @@ def compute_center_alignment(
         offset_x=offset_x,
         offset_y=offset_y,
         overlay_text=overlay_text,
+        voice_message=voice_message,
+        voice_key=voice_key,
     )
+
+
+class CenterAlignmentVoiceGuidance:
+    """인물들의 무게중심이 프레임 중심에서 벗어났을 때 음성으로 안내합니다."""
+
+    def __init__(
+        self,
+        speech: SpeechNotifier | None = None,
+        resolved_frames: int = 8,
+    ) -> None:
+        # 같은 중심 이탈 상태가 이어지는 동안 안내가 계속 반복되지 않도록 상태를 기억합니다.
+        self.speech = speech or SpeechNotifier(enabled=True)
+        self.resolved_frames = resolved_frames
+        self._active_key = ""
+        self._resolved_count = 0
+
+    def process(self, center_alignment: CenterAlignment, speak: bool = True) -> bool:
+        """중심 정렬 결과를 보고 필요한 경우 한 번만 음성 안내를 출력합니다."""
+
+        if not speak:
+            return False
+
+        if not center_alignment.has_target or center_alignment.aligned:
+            self._resolved_count += 1
+            if self._resolved_count >= self.resolved_frames:
+                self._active_key = ""
+            return False
+
+        self._resolved_count = 0
+        if not center_alignment.voice_message or center_alignment.voice_key == self._active_key:
+            return False
+
+        spoken = self.speech.speak(center_alignment.voice_message)
+        if spoken:
+            self._active_key = center_alignment.voice_key
+        return spoken
