@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -32,14 +33,14 @@ class FaceOutOfFrameGuidance:
         resolved_frames: int = 8,
         tracker: Optional[CentroidTracker] = None,
         speech: Optional[SpeechNotifier] = None,
+        id_cooldown_sec: float = 5.0,
     ) -> None:
-        # clip_threshold: 얼굴 면적의 몇 % 이상이 잘려야 안내를 트리거할지 결정합니다.
         self.clip_threshold = clip_threshold
         self.resolved_frames = resolved_frames
         self.tracker = tracker or CentroidTracker()
         self.speech = speech or SpeechNotifier(enabled=True)
-        self._active_guidance_ids: set[int] = set()
-        self._clear_frames = 0
+        self._last_spoken: Dict[int, float] = {}
+        self._id_cooldown_sec = id_cooldown_sec
 
     def process(
         self,
@@ -52,23 +53,14 @@ class FaceOutOfFrameGuidance:
         tracks = self.tracker.update(boxes)
         events = self._find_outofframe_events(frame.shape, tracks)
 
-        self._update_resolved_state(events)
-
         if speak and events:
             event = events[0]
-            if event.object_id not in self._active_guidance_ids:
+            now = time.time()
+            if now - self._last_spoken.get(event.object_id, 0.0) >= self._id_cooldown_sec:
                 if self.speech.speak(event.message):
-                    self._active_guidance_ids.add(event.object_id)
+                    self._last_spoken[event.object_id] = now
 
         return tracks, events
-
-    def _update_resolved_state(self, events: List[OutOfFrameEvent]) -> None:
-        if events:
-            self._clear_frames = 0
-            return
-        self._clear_frames += 1
-        if self._clear_frames >= self.resolved_frames:
-            self._active_guidance_ids.clear()
 
     def _find_outofframe_events(
         self,
@@ -83,11 +75,15 @@ class FaceOutOfFrameGuidance:
             x, y, w, h = person.bbox
             face_area = max(1, w * h)
 
-            # 각 방향으로 잘린 픽셀 수를 계산합니다.
-            clip_left = max(0, -x)
-            clip_top = max(0, -y)
-            clip_right = max(0, (x + w) - frame_w)
-            clip_bottom = max(0, (y + h) - frame_h)
+            # 대부분의 검출기는 bbox를 프레임 내로 클리핑해서 반환하므로,
+            # 얼굴 크기의 15%를 edge margin으로 사용해 "가장자리 근접 = 이탈"로 간주합니다.
+            edge_x = max(10, int(w * 0.15))
+            edge_y = max(10, int(h * 0.15))
+
+            clip_left   = max(0, edge_x - x)
+            clip_top    = max(0, edge_y - y)
+            clip_right  = max(0, (x + w) - (frame_w - edge_x))
+            clip_bottom = max(0, (y + h) - (frame_h - edge_y))
 
             visible_area = max(0, w - clip_left - clip_right) * max(0, h - clip_top - clip_bottom)
             clip_ratio = 1.0 - visible_area / face_area
