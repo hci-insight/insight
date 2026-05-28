@@ -7,6 +7,7 @@ import cv2
 
 from camera_guidance import compute_center_alignment
 from detection import Detection, make_detector
+from outofframe_guidance import FaceOutOfFrameGuidance
 from overlap_guidance import FaceOverlapGuidance
 from speech import SpeechNotifier
 from shot_capture_experiment import (
@@ -36,6 +37,9 @@ def main() -> None:
     detector = make_detector(args.detector)
     overlap_guide = FaceOverlapGuidance(
         overlap_threshold=args.overlap_threshold,
+        speech=SpeechNotifier(enabled=not args.disable_overlap_voice),
+    )
+    outofframe_guide = FaceOutOfFrameGuidance(
         speech=SpeechNotifier(enabled=not args.disable_overlap_voice),
     )
     target_persons = max(1, args.target_persons)
@@ -80,6 +84,11 @@ def main() -> None:
             detections = last_detections
 
             overlap_tracks, overlap_events = overlap_guide.process(
+                analysis_frame,
+                detections,
+                speak=not args.disable_overlap_voice,
+            )
+            outofframe_guide.process(
                 analysis_frame,
                 detections,
                 speak=not args.disable_overlap_voice,
