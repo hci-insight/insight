@@ -156,6 +156,10 @@ def mode_condition_met(
     one_person_ratio_max: float,
     center_tolerance: float,
     border_margin_ratio: float,
+    inside_frame: bool = True,
+    no_overlap: bool = True,
+    centered: bool = True,
+    require_quality: bool = True,
 ) -> bool:
     if mode == MODE_PERSON1:
         if person_count != 1:
@@ -174,7 +178,13 @@ def mode_condition_met(
         within_ratio = one_person_ratio_min <= area_ratio <= one_person_ratio_max
         return center_alignment.aligned and inside_margin and within_ratio
     if mode == MODE_COUNT3:
-        return person_count == target_persons
+        if person_count != target_persons:
+            return False
+        # 인원수가 맞아도 화면내부/중심/겹침없음 세 품질조건을 모두 만족해야 촬영한다.
+        # (--disable-count3-quality 로 require_quality=False 가 되면 옛 머릿수-only 동작)
+        if require_quality:
+            return inside_frame and no_overlap and centered
+        return True
     if mode == MODE_RATIO:
         return ratio_min <= area_ratio <= ratio_max
     return False
@@ -473,6 +483,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--disable-guidance-voice",
         action="store_true",
         help="Show guidance visually, but do not speak feedback aloud.",
+    )
+    parser.add_argument(
+        "--disable-count3-quality",
+        action="store_true",
+        help="Revert count3 to head-count-only (skip inside-frame/center/overlap gate).",
+    )
+    parser.add_argument(
+        "--no-countdown",
+        action="store_true",
+        help="Capture immediately when conditions are met (skip the spoken countdown).",
+    )
+    parser.add_argument(
+        "--countdown-steps",
+        type=int,
+        default=3,
+        help="Number of spoken countdown steps before capture (하나/둘/셋 = 3).",
+    )
+    parser.add_argument(
+        "--countdown-step-sec",
+        type=float,
+        default=1.0,
+        help="Seconds between countdown steps.",
     )
     return parser
 

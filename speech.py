@@ -35,8 +35,13 @@ class SpeechNotifier:
             self._pyttsx3 = None
             self._engine = None
 
-    def speak(self, message: str) -> bool:
-        """쿨다운 조건을 만족할 때만 안내 문장을 음성 출력합니다."""
+    def speak(self, message: str, force: bool = False) -> bool:
+        """쿨다운 조건을 만족할 때만 안내 문장을 음성 출력합니다.
+
+        force=True면 쿨다운/중복 억제를 건너뛰고 바로 재생을 시도합니다.
+        (카운트다운 "하나·둘·셋"처럼 의도된 연속 발화가 끊기지 않게 하기 위함입니다.)
+        다만 동시에 두 음성이 겹치지 않도록 재생 중 잠금(is_playing)은 유지합니다.
+        """
         if not self.enabled:
             return False
         now = time.time()
@@ -44,10 +49,11 @@ class SpeechNotifier:
         with SpeechNotifier._global_lock:
             if SpeechNotifier._global_is_playing:
                 return False
-            if now - SpeechNotifier._global_last_spoken_at < self.cooldown_sec:
-                return False
-            if message == self.last_message and (now - self.last_spoken_at) < self.cooldown_sec:
-                return False
+            if not force:
+                if now - SpeechNotifier._global_last_spoken_at < self.cooldown_sec:
+                    return False
+                if message == self.last_message and (now - self.last_spoken_at) < self.cooldown_sec:
+                    return False
             SpeechNotifier._global_is_playing = True
 
         spoken, async_playback = self._speak_now(message)
